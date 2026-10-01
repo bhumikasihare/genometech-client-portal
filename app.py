@@ -47,7 +47,7 @@ SHEET_ID = "1un359_bf30-82K3C74hH7sX-uSH-jpx1yB12N7cB3v0"
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSsQkADNSxfsePaLn1b4RPN018cIyO8bHnfRtmIYGAawnRtgjBGhWhM35GMRhNrVvfcf3wZE7indbHl/pub?output=csv"
 APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz-pKMSgW-i32k9XAYEPaybbE5V4MV9Pm2boob3PFW10JwqahSPZjlFD1nIoS31KtLt/exec"
 MASTER_BYPASS_CODE = "GENOMETECH_MASTER_2026!"
-MAIN_WEBSITE_URL = "https://bhumikasihare.github.io/genometech-studio/"
+MAIN_WEBSITE_URL = "https://genometechstudio.github.io"
 
 # --- PROFESSIONAL DARK SLATE & EMERALD GREEN THEME + FLOATING STICKERS ---
 st.markdown("""
@@ -109,6 +109,14 @@ st.markdown("""
         background: rgba(16, 185, 129, 0.28);
         color: #ffffff !important;
         box-shadow: 0 0 15px rgba(16, 185, 129, 0.35);
+    }
+    .gts-brand {
+        text-decoration: none;
+        transition: opacity 0.2s ease;
+        cursor: pointer;
+    }
+    .gts-brand:hover {
+        opacity: 0.85;
     }
     @keyframes liquidFlow {
         0% { background-position: 0% 50%; }
@@ -742,13 +750,13 @@ def render_64_piece_puzzle(client_key):
 head_col1, head_col2 = st.columns([3.6, 1.4])
 with head_col1:
     st.markdown(
-        '<div style="display:flex; align-items:center; gap:12px;">'
-        '<span style="font-size:2rem;">🧬</span>'
-        '<div>'
-        '<span style="font-size:1.55rem; font-weight:800; color:#f8fafc; letter-spacing:-0.02em;">GenomeTech Studio</span>'
-        '<span style="font-size:1rem; color:#34d399; font-weight:600; margin-left:8px;">| Client Login Portal</span>'
-        '</div>'
-        '</div>',
+        f'<div style="display:flex; align-items:center; gap:12px;">'
+        f'<span style="font-size:2rem;">🧬</span>'
+        f'<div>'
+        f'<a href="{MAIN_WEBSITE_URL}" class="gts-brand" style="font-size:1.55rem; font-weight:800; color:#f8fafc; letter-spacing:-0.02em;">GenomeTech Studio</a>'
+        f'<span style="font-size:1rem; color:#34d399; font-weight:600; margin-left:8px;">| Client Login Portal</span>'
+        f'</div>'
+        f'</div>',
         unsafe_allow_html=True
     )
 with head_col2:
