@@ -17,8 +17,15 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- SECURITY: ANTI-REUSE DATABASE ---
+# --- SECURITY: ANTI-REUSE DATABASE & AUTHORIZED DEMO KEYS ---
 DB_FILE = "used_keys.json"
+
+# ONLY these specific demo keys will work. Add new ones here before giving them to clients.
+AUTHORIZED_DEMO_KEYS = [
+    "GTS-DEMO-ALFA",
+    "GTS-DEMO-BETA",
+    "GTS-DEMO-GAMMA"
+]
 
 def is_key_burned(key_to_check):
     if not os.path.exists(DB_FILE):
@@ -283,7 +290,6 @@ def load_live_sheet_df():
                 if r.status_code == 200 and "Client Email" in r.text:
                     df = pd.read_csv(io.StringIO(r.text), dtype=str, keep_default_na=False)
                     df.columns = [str(c).strip() for c in df.columns]
-                    # Save a local backup copy in case Wi-Fi/DNS drops later
                     try:
                         df.to_csv(LOCAL_CACHE_FILE, index=False)
                     except Exception:
@@ -292,14 +298,12 @@ def load_live_sheet_df():
             except Exception:
                 time.sleep(0.5)
 
-    # Fallback 1: Use last synced local backup if internet/DNS is temporarily offline
     if os.path.exists(LOCAL_CACHE_FILE):
         st.toast("⚠️ Offline/DNS hiccup detected — using last synced Sheet snapshot.", icon="📡")
         df = pd.read_csv(LOCAL_CACHE_FILE, dtype=str, keep_default_na=False)
         df.columns = [str(c).strip() for c in df.columns]
         return df
 
-    # Fallback 2: Built-in offline test row if no local cache exists yet
     st.toast("⚠️ Internet/DNS offline — using local test mode.", icon="🛠️")
     return pd.DataFrame([{
         "Timestamp": "2026-09-29",
@@ -331,10 +335,6 @@ def get_col_val(row, possible_names, default=""):
     return default
 
 def post_single_payload_to_gas(payload):
-    """
-    Handles Google Apps Script's 302 redirect properly so POST body is never lost
-    and parses the exact JSON response from script.googleusercontent.com.
-    """
     try:
         r = requests.post(
             APPS_SCRIPT_URL,
@@ -343,7 +343,6 @@ def post_single_payload_to_gas(payload):
             allow_redirects=False,
             timeout=12
         )
-        # Google Apps Script executes doPost(e) and returns 302 with Location header for the JSON output
         if r.status_code in [301, 302, 303, 307, 308] and "Location" in r.headers:
             r_out = requests.get(r.headers["Location"], timeout=10)
             try:
@@ -360,17 +359,10 @@ def post_single_payload_to_gas(payload):
     return {}
 
 def sync_update_to_sheet(active_row, action_type, text_value):
-    """
-    Matches your deployed Google Apps Script doPost(e) which checks:
-    if (sheetEmail === data.clientEmail && sheetProjectID === data.projectID)
-    where sheetEmail is Column B (index 1) and sheetProjectID is Column D (index 3).
-    Tries string, stripped, and integer/float variations in case Column D in Google Sheets is stored as a number!
-    """
     col_b_email = str(active_row.iloc[1]) if len(active_row) > 1 else get_col_val(active_row, ["Client Email"], "")
     col_c_cid = str(active_row.iloc[2]) if len(active_row) > 2 else get_col_val(active_row, ["Client ID"], "")
     col_d_pid = str(active_row.iloc[3]) if len(active_row) > 3 else get_col_val(active_row, ["Project ID"], "")
 
-    # Build candidate values for Project ID (string, stripped, int if numeric, or Client ID fallback)
     pid_candidates = []
     for cand in [col_d_pid, col_d_pid.strip(), col_c_cid, col_c_cid.strip(), ""]:
         if cand not in pid_candidates:
@@ -417,6 +409,8 @@ if "feedback_submitted" not in st.session_state:
     st.session_state.feedback_submitted = {}
 if "last_sheet_sync_msg" not in st.session_state:
     st.session_state.last_sheet_sync_msg = ""
+if "checkout_unlocked" not in st.session_state:
+    st.session_state.checkout_unlocked = False
 
 # --- 64-PIECE (8x8) GENOMIC PICTURE PUZZLE COMPONENT ---
 def render_64_piece_puzzle(client_key):
@@ -769,6 +763,27 @@ st.markdown("<hr style='border-color: rgba(16, 185, 129, 0.2); margin: 0.75rem 0
 
 # --- LOGIN SCREEN ---
 if not st.session_state.logged_in:
+    
+    with st.sidebar:
+        st.markdown("### 🔑 Master Access")
+        master_key = st.text_input("Enter Key:", type="password", key="master_key_input")
+        if st.button("Unlock Portal"):
+            if master_key == "GTS-MASTER-UNLIMITED":
+                st.session_state.checkout_unlocked = True
+                st.success("Master Key Accepted.")
+                st.rerun()
+            elif master_key in AUTHORIZED_DEMO_KEYS:
+                burned, burn_date = is_key_burned(master_key)
+                if burned:
+                    st.error(f"❌ Security Lock: This Demo Key was already claimed on {burn_date}.")
+                else:
+                    burn_key(master_key)
+                    st.session_state.checkout_unlocked = True
+                    st.success("Demo Key Accepted.")
+                    st.rerun()
+            else:
+                st.error("Invalid Key or Unauthorized Demo Code.")
+
     _, login_col, _ = st.columns([1, 1.4, 1])
     with login_col:
         st.markdown(
@@ -840,6 +855,15 @@ else:
     modules_val = get_col_val(active_row, ["Modules Chosen", "Module"], "Standard Omics Execution")
     status_val = get_col_val(active_row, ["Status"], "In Progress")
     advance_status = get_col_val(active_row, ["Advance Paid (30%)"], "Paid")
+    
+    # Calculate Expected 70% Amount Base on Sheet Data
+    try:
+        total_usd = float(re.sub(r'[^\d.]', '', str(get_col_val(active_row, ["Total Price"], "0"))))
+    except ValueError:
+        total_usd = 0.0
+    expected_70_cents = int((total_usd * 0.70) * 100)
+    if expected_70_cents <= 0:
+        expected_70_cents = 100  # Fallback to prevent free unauthorized unlocks if sheet is blank
 
     raw_progress = get_col_val(active_row, ["Progress Percent", "Progress"], "0")
     try:
@@ -940,9 +964,11 @@ else:
         )
         st.markdown(progress_bar_html, unsafe_allow_html=True)
 
-        # Show last sync confirmation message if present
         if st.session_state.last_sheet_sync_msg:
             st.caption(st.session_state.last_sheet_sync_msg)
+            
+        if st.session_state.checkout_unlocked:
+            st.info("🔓 Portal Bypass Enabled. Downloads will not require payment verification.")
 
         # 2. STEP LOGIC controlled by Sheet Columns + Master Code
         is_ready_for_preview = (progress_val >= 100) or bool(initial_link or final_link or redo_file_link)
@@ -964,6 +990,7 @@ else:
                 or bool(redo_file_link)
                 or master_in_final
                 or master_in_redo
+                or st.session_state.checkout_unlocked
             )
 
             preview_img_url = (
@@ -982,7 +1009,7 @@ else:
                     f'<div style="color:#ffffff; font-weight:800; font-size:1.05rem; max-width:480px;">Your file is complete! To unlock full resolution files, please pay the remaining 70% amount below and copy your Payment ID to unlock.</div>'
                     f'</div>'
                     f'</div>'
-                    f'<a href="{payment_70_link}" target="_blank" rel="noopener noreferrer" class="pay-btn">💳 Pay Remaining 70% Balance Now ↗</a>'
+                    f'<a href="{payment_70_link}" target="_blank" rel="noopener noreferrer" class="pay-btn">💳 Pay Remaining 70% Balance Now (${(expected_70_cents/100):.2f}) ↗</a>'
                     f'<div style="font-size:0.8rem; color:#94a3b8; text-align:center; margin-bottom:8px;">After completing payment, copy your <b>Payment ID</b> and paste it in the box below to immediately unlock your deliverable files.</div>'
                     f'</div>'
                 )
@@ -1004,8 +1031,8 @@ else:
                             st.session_state.unlocked_projects.add(project_id_val)
                             st.rerun()
 
-                        # 2. DEMO KEY CHECK (One-Time Use)
-                        elif entered_key.startswith("GTS-DEMO-"):
+                        # 2. AUTHORIZED DEMO KEY CHECK (One-Time Use)
+                        elif entered_key in AUTHORIZED_DEMO_KEYS:
                             burned, burn_date = is_key_burned(entered_key)
                             if burned:
                                 st.error(f"❌ Security Lock: This Demo Key was already claimed on {burn_date}.")
@@ -1014,7 +1041,7 @@ else:
                                 st.session_state.unlocked_projects.add(project_id_val)
                                 st.rerun()
 
-                        # 3. RAZORPAY API VERIFICATION (One-Time Use)
+                        # 3. RAZORPAY API VERIFICATION (Amount-Checked & One-Time Use)
                         elif entered_key.startswith("pay_") and len(entered_key) >= 14:
                             burned, burn_date = is_key_burned(entered_key)
                             if burned:
@@ -1027,9 +1054,13 @@ else:
                                     
                                     # Verify the transaction was successful
                                     if payment["status"] in ["captured", "authorized"]:
-                                        burn_key(entered_key)
-                                        st.session_state.unlocked_projects.add(project_id_val)
-                                        st.rerun()
+                                        # Verify exact amount matches expected 70% calculation (allowing $1 variance)
+                                        if payment["amount"] >= (expected_70_cents - 100) and payment["currency"] == "USD":
+                                            burn_key(entered_key)
+                                            st.session_state.unlocked_projects.add(project_id_val)
+                                            st.rerun()
+                                        else:
+                                            st.error(f"❌ Invalid Payment Amount. Expected roughly ${(expected_70_cents/100):.2f} USD, but found {payment['amount']/100:.2f} {payment['currency']}.")
                                     else:
                                         st.error(f"❌ Payment Status: {payment['status'].upper()}. This transaction is not complete.")
                                         
@@ -1037,7 +1068,7 @@ else:
                                     st.error("❌ Invalid Payment ID. The bank API could not verify this transaction.")
                                     
                         else:
-                            st.error("❌ Invalid Key Format. Must be a valid Razorpay ID (pay_...) or authorized Demo Key.")
+                            st.error("❌ Invalid Key Format or Unauthorized Demo Key.")
 
             else:
                 raw_deliverable = final_link if final_link else initial_link
@@ -1066,7 +1097,6 @@ else:
                     raw_cid = str(active_row.iloc[2]).strip() if len(active_row) > 2 else client_id_val
                     raw_pid = str(active_row.iloc[3]).strip() if len(active_row) > 3 else project_id_val
 
-                    # Try exact Column D value (string and int if numeric), plus Column C fallback
                     pid_list = [raw_pid]
                     if raw_pid.isdigit():
                         pid_list.append(int(raw_pid))
@@ -1108,7 +1138,6 @@ else:
                 if st.session_state.get(sync_msg_key):
                     st.caption(st.session_state[sync_msg_key])
 
-                # CASE 1: Redo File Link (or Master Code) is pasted in the Redo column -> Download Revised File + Final Remarks
                 if has_redo_file_ready:
                     redo_dl_url = format_direct_download_link(redo_file_link if redo_file_link else final_link)
                     st.markdown(
@@ -1143,7 +1172,6 @@ else:
                                 st.warning("Please enter your remarks before submitting.")
                         st.markdown('</div>', unsafe_allow_html=True)
 
-                # CASE 2: Redo ("Yes") was submitted -> Show "Work in progress, please wait..."
                 elif bool(redo_saved_text) and not has_redo_file_ready:
                     st.markdown(
                         f'<div class="portal-card" style="border-color:#fbbf24;">'
@@ -1155,7 +1183,6 @@ else:
                         unsafe_allow_html=True
                     )
 
-                # CASE 3: Redo ("No") remarks were submitted -> Show Catchy Closing Line
                 elif bool(feedback_saved_text):
                     st.markdown(
                         '<div class="portal-card" style="background:rgba(16,185,129,0.15); border:1px solid #10b981; text-align:center;">'
@@ -1164,7 +1191,6 @@ else:
                         unsafe_allow_html=True
                     )
 
-                # CASE 4: Fresh Redo Choice ("No" or "Yes")
                 else:
                     st.markdown('<div class="portal-card">', unsafe_allow_html=True)
                     st.markdown("#### 🔄 Do you need a Redo / Revision on this deliverable file?")
