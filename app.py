@@ -6,6 +6,8 @@ import json
 import time
 import io
 import re
+import os
+import razorpay
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -14,6 +16,24 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# --- SECURITY: ANTI-REUSE DATABASE ---
+DB_FILE = "used_keys.json"
+
+def is_key_burned(key_to_check):
+    if not os.path.exists(DB_FILE):
+        with open(DB_FILE, 'w') as f:
+            json.dump({"used_keys": {}}, f)
+    with open(DB_FILE, 'r') as f:
+        data = json.load(f)
+    return key_to_check in data["used_keys"], data.get("used_keys", {}).get(key_to_check, "")
+
+def burn_key(key_to_burn):
+    with open(DB_FILE, 'r') as f:
+        data = json.load(f)
+    data["used_keys"][key_to_burn] = time.strftime("%Y-%m-%d %H:%M:%S")
+    with open(DB_FILE, 'w') as f:
+        json.dump(data, f)
 
 # --- LIVE GOOGLE SHEET, APPS SCRIPT & WEBSITE ENDPOINTS ---
 SHEET_ID = "1un359_bf30-82K3C74hH7sX-uSH-jpx1yB12N7cB3v0"
@@ -241,8 +261,6 @@ def format_direct_download_link(raw_url):
             sep = "&" if "?" in url else "?"
             return f"{url}{sep}dl=1"
     return url
-
-import os
 
 LOCAL_CACHE_FILE = "_sheet_backup.csv"
 
@@ -973,17 +991,53 @@ else:
                 with st.form("unlock_deliverable_form"):
                     unlock_code_in = st.text_input(
                         "Paste Payment ID to Unlock Deliverable Files",
-                        placeholder="e.g., pay_Pxyz123456789"
+                        placeholder="e.g., pay_Pxyz123456789 or GTS-DEMO-..."
                     )
                     unlock_submit = st.form_submit_button("🔓 Verify & Unlock Full Files", use_container_width=True)
 
                     if unlock_submit:
-                        code_trimmed = unlock_code_in.strip()
-                        if has_master_code(code_trimmed) or (len(code_trimmed) >= 6 and not code_trimmed.isspace()):
+                        entered_key = unlock_code_in.strip()
+                        if not entered_key:
+                            st.warning("Please enter a key.")
+                        # 1. INFINITE MASTER KEY CHECK
+                        elif entered_key == "GTS-MASTER-UNLIMITED" or has_master_code(entered_key):
                             st.session_state.unlocked_projects.add(project_id_val)
                             st.rerun()
+
+                        # 2. DEMO KEY CHECK (One-Time Use)
+                        elif entered_key.startswith("GTS-DEMO-"):
+                            burned, burn_date = is_key_burned(entered_key)
+                            if burned:
+                                st.error(f"❌ Security Lock: This Demo Key was already claimed on {burn_date}.")
+                            else:
+                                burn_key(entered_key)
+                                st.session_state.unlocked_projects.add(project_id_val)
+                                st.rerun()
+
+                        # 3. RAZORPAY API VERIFICATION (One-Time Use)
+                        elif entered_key.startswith("pay_") and len(entered_key) >= 14:
+                            burned, burn_date = is_key_burned(entered_key)
+                            if burned:
+                                st.error(f"❌ Security Lock: This Receipt ID was already claimed on {burn_date}. Keys cannot be shared.")
+                            else:
+                                try:
+                                    # Authenticate with Razorpay Servers
+                                    client = razorpay.Client(auth=(st.secrets["razorpay"]["key_id"], st.secrets["razorpay"]["key_secret"]))
+                                    payment = client.payment.fetch(entered_key)
+                                    
+                                    # Verify the transaction was successful
+                                    if payment["status"] in ["captured", "authorized"]:
+                                        burn_key(entered_key)
+                                        st.session_state.unlocked_projects.add(project_id_val)
+                                        st.rerun()
+                                    else:
+                                        st.error(f"❌ Payment Status: {payment['status'].upper()}. This transaction is not complete.")
+                                        
+                                except Exception as e:
+                                    st.error("❌ Invalid Payment ID. The bank API could not verify this transaction.")
+                                    
                         else:
-                            st.error("Invalid Payment ID. Please paste a valid Payment ID from your receipt.")
+                            st.error("❌ Invalid Key Format. Must be a valid Razorpay ID (pay_...) or authorized Demo Key.")
 
             else:
                 raw_deliverable = final_link if final_link else initial_link
